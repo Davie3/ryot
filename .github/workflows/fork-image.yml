@@ -1,0 +1,207 @@
+# Davie3/ryot fork: build each upstream release tag with this branch's commits replayed
+# on top, smoke-test the image, then push to ghcr.io/davie3/ryot. See FORK.md.
+name: Fork image
+
+on:
+  schedule:
+    - cron: "23 10 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream tag to build (default newest vX.Y.Z)
+        required: false
+      force:
+        description: Rebuild even if the image tag already exists
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/davie3/ryot
+  TARGET: x86_64-unknown-linux-gnu
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      floating: ${{ steps.tag.outputs.floating }}
+      build: ${{ steps.exists.outputs.build }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          persist-credentials: false
+      - name: Pick upstream tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          git fetch --no-tags --force https://github.com/IgnisDa/ryot.git '+refs/tags/v*:refs/tags/v*'
+          releases=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+          tag="${INPUT_TAG:-$(head -1 <<<"$releases")}"
+          major="${tag%%.*}"
+          # Floating tags (vX, vX.Y) only move forward: never point them at an older release.
+          newest_in_major=$(grep -m1 "^${major}\." <<<"$releases")
+          floating=$([[ "$tag" == "$newest_in_major" ]] && echo true || echo false)
+          echo "tag=$tag floating=$floating"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "floating=$floating" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check whether it is already published
+        id: exists
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [[ "$FORCE" != "true" ]] && docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "$IMAGE:$TAG is already published"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-transactional:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: ci/fork-rebase.sh "$TAG"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: "yarn"
+      - run: yarn install --immutable
+      - run: yarn turbo run build --filter=@ryot/transactional
+      - run: yarn workspace @ryot/transactional copy-templates
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: templates
+          retention-days: 1
+          path: crates/services/notification/templates/
+
+  build-backend:
+    needs: [resolve, build-transactional]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: ci/fork-rebase.sh "$TAG"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: templates
+          path: crates/services/notification/templates/
+      - name: Extract rust toolchain
+        id: toolchain
+        run: echo "channel=$(grep channel rust-toolchain.toml | awk -F' = ' '{printf $2}' | tr -d '"')" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@0b1efabc08b657293548b77fb76cc02d26091c7e
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          targets: ${{ env.TARGET }}
+      - uses: Swatinem/rust-cache@42c55942cfd355e94e6864616f4dbb3392bd2789
+        with:
+          key: ${{ env.TARGET }}-release-${{ hashFiles('Cross.toml', 'ci/cross-pre-build.sh') }}
+      - name: Install cross
+        uses: taiki-e/cache-cargo-install-action@b8c5be6c3fb064f797977463ac00b01844751632
+        with:
+          tool: cross
+          git: https://github.com/cross-rs/cross
+          rev: 51f46f296253d8122c927c5bb933e3c4f27cc317
+          locked: false
+      - name: Build
+        env:
+          APP_VERSION: ${{ env.TAG }}
+          UNKEY_ROOT_KEY: unused
+        run: cross build --locked --target "$TARGET" --release
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: backend-amd64
+          path: target/${{ env.TARGET }}/release/backend
+          retention-days: 1
+
+  build-docker:
+    needs: [resolve, build-backend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: ci/fork-rebase.sh "$TAG"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          path: ${{ github.workspace }}/artifact/
+      - uses: docker/setup-buildx-action@65d18f8f8a05aab1b2d761032bec9cd5578caadb
+      - uses: docker/build-push-action@9e436ba9f2d7bcd1d038c8e55d039d37896ddc5d
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ryot-fork:test
+          labels: |
+            org.opencontainers.image.source=https://github.com/Davie3/ryot
+            org.opencontainers.image.version=${{ needs.resolve.outputs.tag }}
+            org.opencontainers.image.description=Ryot (Davie3 fork)
+      - name: Smoke test
+        run: |
+          docker network create smoke
+          docker run -d --name smoke-db --network smoke -e POSTGRES_PASSWORD=postgres postgres:18-alpine
+          until docker exec smoke-db pg_isready -U postgres >/dev/null 2>&1; do sleep 2; done
+          docker run -d --name smoke-ryot --network smoke -p 8000:8000 \
+            -e DATABASE_URL=postgres://postgres:postgres@smoke-db:5432/postgres \
+            -e SERVER_ADMIN_ACCESS_TOKEN=fork-smoke-test-0123456789 \
+            -e DISABLE_TELEMETRY=true ryot-fork:test
+          for _ in $(seq 60); do curl -fsS -o /dev/null localhost:8000/health && break; sleep 5; done
+          details=$(curl -fsS -X POST localhost:8000/backend/graphql -H 'content-type: application/json' \
+            -d '{"query":"{ coreDetails { version isServerKeyValidated } }"}' || true)
+          echo "coreDetails: $details"
+          if ! jq -e --arg v "$TAG" '.data.coreDetails | .version == $v and .isServerKeyValidated == true' <<<"$details"; then
+            docker logs smoke-ryot | tail -100
+            exit 1
+          fi
+      - uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        env:
+          FLOATING: ${{ needs.resolve.outputs.floating }}
+        run: |
+          tags=("$TAG")
+          if [[ "$FLOATING" == "true" ]]; then
+            tags+=("${TAG%.*}" "${TAG%%.*}")
+          fi
+          for t in "${tags[@]}"; do
+            docker tag ryot-fork:test "$IMAGE:$t"
+            docker push "$IMAGE:$t"
+          done
