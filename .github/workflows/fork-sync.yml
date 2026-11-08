@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # push sync/vX.Y.Z
+  pull-requests: write # open the PR
 
 concurrency:
   group: fork-sync
@@ -23,9 +24,7 @@ jobs:
           persist-credentials: false
       - name: Open a PR for the newest upstream release
         env:
-          # Fine-grained PAT (this repo only: Contents, Pull requests, Workflows read/write).
-          # GITHUB_TOKEN can't push upstream's workflow changes, and its PRs don't trigger CI.
-          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           git fetch --no-tags --force https://github.com/IgnisDa/ryot.git '+refs/tags/v*:refs/tags/v*'
@@ -40,13 +39,21 @@ jobs:
             echo "A PR for $tag already exists"
             exit 0
           fi
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if git ls-remote --exit-code --heads "$remote" "$branch" >/dev/null; then
+            echo "$branch is already pushed"
+          elif ! git push "$remote" "$(git rev-parse "$tag^{commit}"):refs/heads/$branch"; then
+            # The Actions token can't push commits that change .github/workflows/.
+            echo "::error::Couldn't push $branch, most likely because $tag changes upstream's workflow files. From a clone: git fetch upstream --tags && git push origin '$tag^{commit}:refs/heads/$branch', then run this workflow again."
+            exit 1
+          fi
           current=$(git tag --merged HEAD --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$(git rev-parse "$tag^{commit}"):refs/heads/$branch"
           gh pr create -R "$REPO" --base fork --head "$branch" \
             --title "chore(fork): sync upstream $tag" \
             --body "$(printf '%s\n' \
               "Merges upstream release \`$tag\` into \`fork\` (currently \`$current\`)." \
               "" \
               "- Upstream changes: https://github.com/IgnisDa/ryot/compare/$current...$tag" \
-              "- The \`Fork image\` check builds and smoke-tests the merged result; nothing is published until this is merged." \
+              "- Nothing builds until this is merged; the merge runs \`Fork image\`, which smoke-tests and publishes \`$tag\`." \
+              "- If it conflicts, resolve it on \`$branch\` and keep \`is_server_key_validated: true,\`." \
               "- Merge with a merge commit (squash and rebase are disabled), so the tag stays in \`fork\`'s history.")"
