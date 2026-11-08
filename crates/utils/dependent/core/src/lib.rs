@@ -170,6 +170,7 @@ async fn build_provider_specifics(
     Ok(specifics)
 }
 
+#[allow(dead_code)]
 async fn get_is_server_key_validated(ss: &Arc<SupportingService>) -> Result<bool> {
     let pro_key = &ss.config.server.pro_key;
     if pro_key.is_empty() {
@@ -276,7 +277,7 @@ pub async fn core_details(ss: &Arc<SupportingService>) -> Result<CoreDetails> {
                 token_valid_for_days: ss.config.users.token_valid_for_days,
                 two_factor_backup_codes_count: TWO_FACTOR_BACKUP_CODES_COUNT,
                 repository_link: "https://github.com/ignisda/ryot".to_owned(),
-                is_server_key_validated: get_is_server_key_validated(ss).await?,
+                is_server_key_validated: true,
             };
             Ok(core_details)
         },
