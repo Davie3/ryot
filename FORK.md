@@ -3,38 +3,39 @@
 Upstream [IgnisDa/ryot](https://github.com/IgnisDa/ryot) with a small core-details change,
 published as `ghcr.io/davie3/ryot` (amd64 only).
 
-## Branches
+## Branch
 
-- `fork` (default and only branch): an upstream release tag plus the fork's commits:
-  1. `core_details` in `crates/utils/dependent/core/src/lib.rs` sets
-     `is_server_key_validated: true`. The backend and frontend read that flag, so nothing
-     else changes.
-  2. this file, `ci/fork-rebase.sh` and `.github/workflows/fork-image.yml`.
+`fork` is the default and only branch: upstream releases merged in, plus the fork's commits:
+
+1. `core_details` in `crates/utils/dependent/core/src/lib.rs` sets
+   `is_server_key_validated: true`. The backend and frontend read that flag, so nothing
+   else changes.
+2. this file and the two `fork-*.yml` workflows.
 
 There is no `main`: upstream is read from the `upstream` remote, and the `Lock main` ruleset
 stops a `main` branch being created here. Upstream's own workflows are disabled in this
 repo's Actions settings.
 
+## Upstream releases
+
+`fork-sync.yml` runs daily. When upstream has a `vX.Y.Z` tag that `fork` doesn't contain, it
+pushes that tag as branch `sync/vX.Y.Z` and opens a PR into `fork`. Merge it with a merge
+commit (the only method enabled), so the tag stays in `fork`'s history. Conflicts, usually in
+the core-details line, are resolved in the PR; keep `is_server_key_validated: true,`. A
+closed PR isn't reopened; a later release gets its own.
+
+The sync needs the `FORK_SYNC_TOKEN` secret: a fine-grained PAT for this repo only, with
+Contents, Pull requests and Workflows set to read and write.
+
 ## Image builds
 
-`fork-image.yml` runs daily (and on demand). It takes the newest upstream `vX.Y.Z` tag and
-exits if `ghcr.io/davie3/ryot:vX.Y.Z` already exists. Otherwise it replays the fork commits
-onto that tag in the runner (`ci/fork-rebase.sh`), builds, starts the image against a
-scratch Postgres, checks `coreDetails` reports the tag and `isServerKeyValidated: true`,
-and only then pushes `vX.Y.Z`, `vX.Y` and `vX`. Floating tags never move to an older
-release. There is no `latest` tag, so a new major is opt-in.
+`fork-image.yml` runs on PRs into `fork` and on pushes to it. It takes the newest upstream
+release merged into the tree, builds, starts the image against a scratch Postgres, and checks
+`coreDetails` reports that tag and `isServerKeyValidated: true`. PR runs stop there. Pushes
+then publish `vX.Y.Z`, `vX.Y` and `vX`, unless `vX.Y.Z` is already published (rerun with
+`gh workflow run fork-image.yml -R Davie3/ryot -f force=true` to replace it). There is no
+`latest` tag, so a new major is opt-in.
 
-If the commits stop applying or the smoke test fails, the run fails and nothing is pushed.
-
-## Syncing by hand
-
-Only needed when a run fails on a conflict, or to move the branch base forward:
-
-```sh
-git fetch upstream --tags
-git rebase --onto vNEW "$(git describe --tags --abbrev=0 --match 'v[0-9]*' fork)" fork
-# resolve conflicts, keep `is_server_key_validated: true,`
-git push --force-with-lease origin fork
-```
-
-Then re-run the workflow (`gh workflow run fork-image.yml -R Davie3/ryot`).
+The check also fails when the tree has a workflow file not listed in `KNOWN_WORKFLOWS`: a
+new upstream workflow would run enabled after a merge. Disable it with
+`gh workflow disable`, then add it to the list.

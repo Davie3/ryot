@@ -1,0 +1,52 @@
+# Davie3/ryot fork: open a PR into `fork` for each new upstream release tag. The PR's head
+# is the upstream tag itself, so merging it brings in exactly that release. See FORK.md.
+name: Fork sync
+
+on:
+  schedule:
+    - cron: "7 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Open a PR for the newest upstream release
+        env:
+          # Fine-grained PAT (this repo only: Contents, Pull requests, Workflows read/write).
+          # GITHUB_TOKEN can't push upstream's workflow changes, and its PRs don't trigger CI.
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          git fetch --no-tags --force https://github.com/IgnisDa/ryot.git '+refs/tags/v*:refs/tags/v*'
+          tag=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if git merge-base --is-ancestor "$tag" HEAD; then
+            echo "$tag is already in fork"
+            exit 0
+          fi
+          branch="sync/$tag"
+          # Any PR for this tag, open or closed: a closed one means it was turned down.
+          if [[ -n "$(gh pr list -R "$REPO" --head "$branch" --state all --json number -q '.[].number')" ]]; then
+            echo "A PR for $tag already exists"
+            exit 0
+          fi
+          current=$(git tag --merged HEAD --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$(git rev-parse "$tag^{commit}"):refs/heads/$branch"
+          gh pr create -R "$REPO" --base fork --head "$branch" \
+            --title "chore(fork): sync upstream $tag" \
+            --body "$(printf '%s\n' \
+              "Merges upstream release \`$tag\` into \`fork\` (currently \`$current\`)." \
+              "" \
+              "- Upstream changes: https://github.com/IgnisDa/ryot/compare/$current...$tag" \
+              "- The \`Fork image\` check builds and smoke-tests the merged result; nothing is published until this is merged." \
+              "- Merge with a merge commit (squash and rebase are disabled), so the tag stays in \`fork\`'s history.")"

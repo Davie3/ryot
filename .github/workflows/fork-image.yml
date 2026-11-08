@@ -1,15 +1,14 @@
-# Davie3/ryot fork: build each upstream release tag with this branch's commits replayed
-# on top, smoke-test the image, then push to ghcr.io/davie3/ryot. See FORK.md.
+# Davie3/ryot fork: build `fork` (an upstream release plus the fork's commits), smoke-test
+# the image, and on pushes to `fork` publish it to ghcr.io/davie3/ryot. See FORK.md.
 name: Fork image
 
 on:
-  schedule:
-    - cron: "23 10 * * *"
+  push:
+    branches: ["fork"]
+  pull_request:
+    branches: ["fork"]
   workflow_dispatch:
     inputs:
-      tag:
-        description: Upstream tag to build (default newest vX.Y.Z)
-        required: false
       force:
         description: Rebuild even if the image tag already exists
         type: boolean
@@ -19,12 +18,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: fork-image
-  cancel-in-progress: false
+  group: fork-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   IMAGE: ghcr.io/davie3/ryot
   TARGET: x86_64-unknown-linux-gnu
+  # Workflows known to be in the tree. Upstream's are disabled in the repo settings; a new
+  # one would run enabled after a sync merge, so it fails the check until it is reviewed.
+  KNOWN_WORKFLOWS: fork-image.yml fork-sync.yml helm-ci.yml helm-docs.yml helm-release.yml main.yml website.yml
 
 jobs:
   resolve:
@@ -34,28 +36,33 @@ jobs:
       packages: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
-      floating: ${{ steps.tag.outputs.floating }}
+      publish: ${{ steps.tag.outputs.publish }}
       build: ${{ steps.exists.outputs.build }}
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Pick upstream tag
+      - name: Check for new workflows
+        run: |
+          unknown=$(comm -23 <(ls .github/workflows | sort) <(tr ' ' '\n' <<<"$KNOWN_WORKFLOWS" | sort))
+          if [[ -n "$unknown" ]]; then
+            echo "::error::New workflow files: $unknown. Disable them (gh workflow disable) after merging, then add them to KNOWN_WORKFLOWS."
+            exit 1
+          fi
+      - name: Find the upstream release in this tree
         id: tag
         env:
-          INPUT_TAG: ${{ inputs.tag }}
+          EVENT: ${{ github.event_name }}
         run: |
           git fetch --no-tags --force https://github.com/IgnisDa/ryot.git '+refs/tags/v*:refs/tags/v*'
-          releases=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
-          tag="${INPUT_TAG:-$(head -1 <<<"$releases")}"
-          major="${tag%%.*}"
-          # Floating tags (vX, vX.Y) only move forward: never point them at an older release.
-          newest_in_major=$(grep -m1 "^${major}\." <<<"$releases")
-          floating=$([[ "$tag" == "$newest_in_major" ]] && echo true || echo false)
-          echo "tag=$tag floating=$floating"
+          tag=$(git tag --merged HEAD --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          publish=$([[ "$EVENT" != "pull_request" ]] && echo true || echo false)
+          echo "tag=$tag publish=$publish"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "floating=$floating" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c
+        if: steps.tag.outputs.publish == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -64,9 +71,10 @@ jobs:
         id: exists
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          PUBLISH: ${{ steps.tag.outputs.publish }}
           FORCE: ${{ inputs.force }}
         run: |
-          if [[ "$FORCE" != "true" ]] && docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+          if [[ "$PUBLISH" == "true" && "$FORCE" != "true" ]] && docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
             echo "$IMAGE:$TAG is already published"
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
@@ -77,14 +85,10 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
-    env:
-      TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - run: ci/fork-rebase.sh "$TAG"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
@@ -101,14 +105,10 @@ jobs:
   build-backend:
     needs: [resolve, build-transactional]
     runs-on: ubuntu-latest
-    env:
-      TAG: ${{ needs.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - run: ci/fork-rebase.sh "$TAG"
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           name: templates
@@ -123,6 +123,7 @@ jobs:
       - uses: Swatinem/rust-cache@42c55942cfd355e94e6864616f4dbb3392bd2789
         with:
           key: ${{ env.TARGET }}-release-${{ hashFiles('Cross.toml', 'ci/cross-pre-build.sh') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install cross
         uses: taiki-e/cache-cargo-install-action@b8c5be6c3fb064f797977463ac00b01844751632
         with:
@@ -132,7 +133,7 @@ jobs:
           locked: false
       - name: Build
         env:
-          APP_VERSION: ${{ env.TAG }}
+          APP_VERSION: ${{ needs.resolve.outputs.tag }}
           UNKEY_ROOT_KEY: unused
         run: cross build --locked --target "$TARGET" --release
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
@@ -152,9 +153,7 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - run: ci/fork-rebase.sh "$TAG"
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
         with:
           path: ${{ github.workspace }}/artifact/
@@ -189,19 +188,16 @@ jobs:
             exit 1
           fi
       - uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c
+        if: needs.resolve.outputs.publish == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push
-        env:
-          FLOATING: ${{ needs.resolve.outputs.floating }}
+        if: needs.resolve.outputs.publish == 'true'
+        # `fork` only moves forward by merging newer releases, so the floating tags always follow it.
         run: |
-          tags=("$TAG")
-          if [[ "$FLOATING" == "true" ]]; then
-            tags+=("${TAG%.*}" "${TAG%%.*}")
-          fi
-          for t in "${tags[@]}"; do
+          for t in "$TAG" "${TAG%.*}" "${TAG%%.*}"; do
             docker tag ryot-fork:test "$IMAGE:$t"
             docker push "$IMAGE:$t"
           done
