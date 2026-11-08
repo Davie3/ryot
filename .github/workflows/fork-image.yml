@@ -23,6 +23,8 @@ concurrency:
 env:
   IMAGE: ghcr.io/davie3/ryot
   TARGET: x86_64-unknown-linux-gnu
+  # Same cross-rs revision as upstream's main.yml.
+  CROSS_REV: 51f46f296253d8122c927c5bb933e3c4f27cc317
   # Workflows known to be in the tree. Upstream's are disabled in the repo settings; a new one
   # arrives enabled with a sync merge, so the build stops until it is disabled and listed.
   KNOWN_WORKFLOWS: fork-image.yml fork-sync.yml helm-ci.yml helm-docs.yml helm-release.yml main.yml website.yml
@@ -115,13 +117,17 @@ jobs:
       - uses: Swatinem/rust-cache@42c55942cfd355e94e6864616f4dbb3392bd2789
         with:
           key: ${{ env.TARGET }}-release-${{ hashFiles('Cross.toml', 'ci/cross-pre-build.sh') }}
-      - name: Install cross
-        uses: taiki-e/cache-cargo-install-action@b8c5be6c3fb064f797977463ac00b01844751632
+      - name: Cache cross
+        id: cross-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          tool: cross
-          git: https://github.com/cross-rs/cross
-          rev: 51f46f296253d8122c927c5bb933e3c4f27cc317
-          locked: false
+          path: |
+            ~/.cargo/bin/cross
+            ~/.cargo/bin/cross-util
+          key: cross-${{ runner.os }}-${{ env.CROSS_REV }}
+      - name: Install cross
+        if: steps.cross-cache.outputs.cache-hit != 'true'
+        run: cargo install cross --git https://github.com/cross-rs/cross --rev "$CROSS_REV"
       - name: Build
         env:
           APP_VERSION: ${{ needs.resolve.outputs.tag }}

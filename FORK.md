@@ -45,6 +45,11 @@ against a scratch Postgres, checks `coreDetails` reports that tag and
 `gh workflow run fork-image.yml -R Davie3/ryot -f force=true` to replace it). There is no
 `latest` tag, so a new major is opt-in.
 
+Actions are locked down in the repo settings (Settings → Actions → General): only the ten
+actions the two workflows use are allowed, and every `uses:` must be pinned to a full commit
+SHA. Bumping an action only changes its SHA in the workflow; adding one also means adding it
+to the allowlist. The default `GITHUB_TOKEN` is read-only; each job asks for what it needs.
+
 The build also stops when the tree has a workflow file not listed in `KNOWN_WORKFLOWS`: a new
 upstream workflow arrives enabled with a sync merge. Disable it with `gh workflow disable`,
 add it to the list, and push.
