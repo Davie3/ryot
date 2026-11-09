@@ -12,6 +12,10 @@ on:
         description: Rebuild even if the image tag already exists
         type: boolean
         default: false
+      publish:
+        description: Push the image (off = build and test only, e.g. a branch with a pending sync)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -67,8 +71,9 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.tag }}
           FORCE: ${{ inputs.force }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
-          if [[ "$FORCE" != "true" ]] && docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+          if [[ "$FORCE" != "true" && "$PUBLISH" != "false" ]] && docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
             echo "$IMAGE:$TAG is already published"
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
@@ -95,6 +100,23 @@ jobs:
           name: templates
           retention-days: 1
           path: crates/services/notification/templates/
+
+  # The image build doesn't typecheck, and the fork's ProtonDB badge needs to keep matching
+  # upstream's frontend after each sync.
+  typecheck-frontend:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: "yarn"
+      - run: yarn install --immutable
+      - run: yarn turbo run typecheck --filter=@ryot/frontend
 
   build-backend:
     needs: [resolve, build-transactional]
@@ -140,7 +162,7 @@ jobs:
           retention-days: 1
 
   build-docker:
-    needs: [resolve, build-backend]
+    needs: [resolve, build-backend, typecheck-frontend]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -184,12 +206,22 @@ jobs:
             docker logs smoke-ryot | tail -100
             exit 1
           fi
+          fields=$(curl -fsS -X POST localhost:8000/backend/graphql -H 'content-type: application/json' \
+            -d '{"query":"{ __type(name: \"MetadataExternalIdentifiers\") { fields { name } } }"}' || true)
+          echo "MetadataExternalIdentifiers: $fields"
+          jq -e '.data.__type.fields | map(.name) | index("steamAppId") != null' <<<"$fields"
+          # ProtonDB itself may be down (the route then returns null); this checks the route is served.
+          proton=$(curl -fsS localhost:8000/api/protondb/1608070 || true)
+          echo "ProtonDB route: $proton"
+          jq -e 'type == "null" or (.tier | type == "string")' <<<"$proton"
       - uses: docker/login-action@28fdb31ff34708d19615a74d67103ddc2ea9725c
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
         # `fork` only moves forward by merging newer releases, so the floating tags always follow it.
         run: |
           for t in "$TAG" "${TAG%.*}" "${TAG%%.*}"; do
