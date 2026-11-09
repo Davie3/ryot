@@ -1,7 +1,7 @@
 # Davie3/ryot fork
 
-Upstream [IgnisDa/ryot](https://github.com/IgnisDa/ryot) with a small core-details change,
-published as `ghcr.io/davie3/ryot` (amd64 only).
+Upstream [IgnisDa/ryot](https://github.com/IgnisDa/ryot) with a small core-details change
+and a ProtonDB badge on game pages, published as `ghcr.io/davie3/ryot` (amd64 only).
 
 ## Branch
 
@@ -10,7 +10,39 @@ published as `ghcr.io/davie3/ryot` (amd64 only).
 1. `core_details` in `crates/utils/dependent/core/src/lib.rs` sets
    `is_server_key_validated: true`. The backend and frontend read that flag, so nothing
    else changes.
-2. this file and the two `fork-*.yml` workflows.
+2. the ProtonDB badge (below).
+3. this file and the two `fork-*.yml` workflows.
+
+### ProtonDB badge
+
+Game pages show the game's [ProtonDB](https://www.protondb.com) tier, linked to its ProtonDB
+page. IGDB gives the Steam app id, which is stored in `externalIdentifiers.steamAppId`; the
+browser asks a frontend route for the tier, because ProtonDB's API only allows its own origin.
+Games added before the badge get the id on their next metadata update.
+
+Fork-only files, which a sync never conflicts with:
+
+- `crates/providers/igdb/src/steam.rs`: picks the Steam app id out of IGDB's `external_games`.
+- `apps/frontend/app/routes/api.protondb.$appId.tsx`: fetches ProtonDB's summary server-side
+  (cached for an hour; no reports, or any error, returns `null`).
+- `apps/frontend/app/components/routes/media-item/displays/protondb-badge.tsx`: the badge.
+  It sends its own GraphQL query as a string, so the generated files in `libs/generated`
+  are untouched.
+
+Lines added to upstream files, the only places a sync can conflict:
+
+| File                                                         | Added                                               |
+| ------------------------------------------------------------ | --------------------------------------------------- |
+| `crates/models/media/src/metadata_models.rs`                 | `steam_app_id` in `MetadataExternalIdentifiers`     |
+| `crates/providers/tvdb/src/shows.rs`                         | `..Default::default()` after `tvdb_id`              |
+| `crates/providers/igdb/src/lib.rs`                           | `mod steam;`, two `external_games.*` lines in `GAME_FIELDS`, the `external_games` field on `IgdbItemResponse`, `external_identifiers` in `igdb_response_to_search_response` |
+| `apps/frontend/app/routes/_dashboard.media.item.$id._index.tsx` | the import and `<ProtonDbBadge metadata={metadataDetails.data} />` after the collections group |
+
+When resolving a conflict, keep upstream's side and add the fork's line back. If upstream
+moves or renames the code a line hooks into, put the line in the equivalent place. If upstream
+adds its own Steam id to `MetadataExternalIdentifiers`, drop `steam_app_id`, point `steam.rs`
+and the badge's query at upstream's field, and drop the `..Default::default()` in TVDB if
+nothing else needs it.
 
 There is no `main`: upstream is read from the `upstream` remote, and the `Lock main` ruleset
 stops a `main` branch being created here. Upstream's own workflows are disabled in this
@@ -21,8 +53,23 @@ repo's Actions settings.
 `fork-sync.yml` runs daily. When upstream has a `vX.Y.Z` tag that `fork` doesn't contain, it
 pushes that tag as branch `sync/vX.Y.Z` and opens a PR into `fork`. Merge it with a merge
 commit (the only method enabled), so the tag stays in `fork`'s history. Conflicts, usually in
-the core-details line, are resolved in the PR; keep `is_server_key_validated: true,`. A
-closed PR isn't reopened; a later release gets its own.
+the core-details line or the badge's lines, are resolved in the PR; keep
+`is_server_key_validated: true,` and see [ProtonDB badge](#protondb-badge). A closed PR isn't
+reopened; a later release gets its own.
+
+To build and test a release with the fork's changes before merging its PR, merge it on a
+scratch branch and run the image build without publishing:
+
+```sh
+git fetch upstream --tags
+git switch -c verify/vX.Y.Z fork
+git merge --no-edit vX.Y.Z   # resolve any conflicts the same way
+git push origin verify/vX.Y.Z
+gh workflow run fork-image.yml -R Davie3/ryot --ref verify/vX.Y.Z -f publish=false
+```
+
+Delete the branch afterwards (`git push origin --delete verify/vX.Y.Z`). If the merge needed
+conflict fixes, merge `fork` into `sync/vX.Y.Z` with the same fixes so the PR picks them up.
 
 The sync uses the Actions token, with "Allow GitHub Actions to create and approve pull
 requests" enabled. That token can't push commits that change `.github/workflows/`, so a
@@ -38,12 +85,14 @@ gh workflow run fork-sync.yml -R Davie3/ryot
 ## Image builds
 
 `fork-image.yml` runs on every push to `fork`, merged sync PRs included; PRs themselves don't
-build. It takes the newest upstream release merged into the tree, builds, starts the image
-against a scratch Postgres, checks `coreDetails` reports that tag and
-`isServerKeyValidated: true`, and only then publishes `vX.Y.Z`, `vX.Y` and `vX`. A push whose
-`vX.Y.Z` is already published skips the build (rerun with
-`gh workflow run fork-image.yml -R Davie3/ryot -f force=true` to replace it). There is no
-`latest` tag, so a new major is opt-in.
+build. It takes the newest upstream release merged into the tree, typechecks the frontend,
+builds, and starts the image against a scratch Postgres. It checks that `coreDetails` reports
+that tag and `isServerKeyValidated: true`, that the schema has `steamAppId`, and that
+`/api/protondb/<id>` is served, and only then publishes `vX.Y.Z`, `vX.Y` and `vX`. A failure
+publishes nothing, so the running image stays as it was. A push whose `vX.Y.Z` is already
+published skips the build (rerun with
+`gh workflow run fork-image.yml -R Davie3/ryot -f force=true` to replace it; `-f publish=false`
+builds and tests without pushing). There is no `latest` tag, so a new major is opt-in.
 
 Actions are locked down in the repo settings (Settings → Actions → General): only the ten
 actions the two workflows use are allowed, and every `uses:` must be pinned to a full commit

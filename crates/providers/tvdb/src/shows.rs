@@ -160,6 +160,7 @@ impl MediaProvider for TvdbShowService {
 
         let external_identifiers = Some(MetadataExternalIdentifiers {
             tvdb_id: show_data.id,
+            ..Default::default()
         });
 
         let seasons_data = show_data.seasons.unwrap_or_default();

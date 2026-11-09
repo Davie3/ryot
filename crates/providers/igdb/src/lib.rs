@@ -37,6 +37,8 @@ use slug::slugify;
 use supporting_service::SupportingService;
 use traits::MediaProvider;
 
+mod steam;
+
 static URL: &str = "https://api.igdb.com/v4";
 static IMAGE_URL: &str = "https://images.igdb.com/igdb/image/upload";
 static AUTH_URL: &str = "https://id.twitch.tv/oauth2/token";
@@ -60,6 +62,8 @@ fields
     release_dates.date,
     release_dates.platform.name,
     release_dates.release_region.region,
+    external_games.uid,
+    external_games.external_game_source,
     videos.*,
     genres.*;
 ";
@@ -186,6 +190,7 @@ struct IgdbItemResponse {
     release_dates: Option<Vec<IgdbReleaseDate>>,
     similar_games: Option<Vec<IgdbItemResponse>>,
     involved_companies: Option<Vec<IgdbInvolvedCompany>>,
+    external_games: Option<Vec<steam::IgdbExternalGame>>,
     #[serde(flatten)]
     rest_data: Option<HashMap<String, serde_json::Value>>,
 }
@@ -750,6 +755,7 @@ impl IgdbService {
                     ..Default::default()
                 })
                 .collect(),
+            external_identifiers: steam::external_identifiers(item.external_games),
             ..Default::default()
         }
     }

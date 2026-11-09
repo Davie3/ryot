@@ -90,6 +90,7 @@ import { GenreItem } from "~/components/routes/media-item/displays/genre-item";
 import { HistoryItem } from "~/components/routes/media-item/displays/history-item";
 import { MetadataCreatorDisplay } from "~/components/routes/media-item/displays/metadata-creator";
 import { DisplayPodcastEpisode } from "~/components/routes/media-item/displays/podcast-episode";
+import { ProtonDbBadge } from "~/components/routes/media-item/displays/protondb-badge";
 import { DisplayShowSeason } from "~/components/routes/media-item/displays/show-season";
 import { VideoGameSpecificsDisplay } from "~/components/routes/media-item/displays/video-game-specifics";
 import { VideoIframe } from "~/components/routes/media-item/displays/video-iframe";
@@ -451,6 +452,7 @@ export default function Page() {
 								))}
 							</Group>
 						) : null}
+						<ProtonDbBadge metadata={metadataDetails.data} />
 						{additionalMetadataDetails.length > 0 ? (
 							<Text c="dimmed" fz={{ base: "sm", lg: "md" }}>
 								{additionalMetadataDetails

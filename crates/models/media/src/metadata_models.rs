@@ -64,6 +64,7 @@ pub struct WatchProvider {
 )]
 pub struct MetadataExternalIdentifiers {
     pub tvdb_id: Option<i32>,
+    pub steam_app_id: Option<i32>,
 }
 
 #[skip_serializing_none]
