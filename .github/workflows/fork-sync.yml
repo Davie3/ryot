@@ -54,6 +54,6 @@ jobs:
               "Merges upstream release \`$tag\` into \`fork\` (currently \`$current\`)." \
               "" \
               "- Upstream changes: https://github.com/IgnisDa/ryot/compare/$current...$tag" \
-              "- Nothing builds until this is merged; the merge runs \`Fork image\`, which smoke-tests and publishes \`$tag\`." \
+              "- Approve the \`Fork image\` run on this PR (Actions-token PRs need it); it builds and smoke-tests the merge without publishing. Merge once it passes; the merge then publishes \`$tag\`." \
               "- If it conflicts, resolve it on \`$branch\` and keep \`is_server_key_validated: true,\`." \
               "- Merge with a merge commit (squash and rebase are disabled), so the tag stays in \`fork\`'s history.")"

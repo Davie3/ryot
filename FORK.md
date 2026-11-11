@@ -57,19 +57,11 @@ the core-details line or the badge's lines, are resolved in the PR; keep
 `is_server_key_validated: true,` and see [ProtonDB badge](#protondb-badge). A closed PR isn't
 reopened; a later release gets its own.
 
-To build and test a release with the fork's changes before merging its PR, merge it on a
-scratch branch and run the image build without publishing:
-
-```sh
-git fetch upstream --tags
-git switch -c verify/vX.Y.Z fork
-git merge --no-edit vX.Y.Z   # resolve any conflicts the same way
-git push origin verify/vX.Y.Z
-gh workflow run fork-image.yml -R Davie3/ryot --ref verify/vX.Y.Z -f publish=false
-```
-
-Delete the branch afterwards (`git push origin --delete verify/vX.Y.Z`). If the merge needed
-conflict fixes, merge `fork` into `sync/vX.Y.Z` with the same fixes so the PR picks them up.
+The PR runs `Fork image` on its merge into `fork`: it builds and smoke-tests the release
+with the fork's changes, without publishing. The Actions token opened the PR, so GitHub holds
+that run until someone with write access selects **Approve workflows to run** on the PR;
+runs from your own pushes to `sync/vX.Y.Z` start straight away. GitHub doesn't run PR
+workflows while the PR conflicts, so a conflicting PR shows no checks until the fix is pushed.
 
 The sync uses the Actions token, with "Allow GitHub Actions to create and approve pull
 requests" enabled. That token can't push commits that change `.github/workflows/`, so a
@@ -84,8 +76,8 @@ gh workflow run fork-sync.yml -R Davie3/ryot
 
 ## Image builds
 
-`fork-image.yml` runs on every push to `fork`, merged sync PRs included; PRs themselves don't
-build. It takes the newest upstream release merged into the tree, typechecks the frontend,
+`fork-image.yml` runs on every push to `fork`, merged sync PRs included, and on PRs into
+`fork`, which build and test but never publish. It takes the newest upstream release merged into the tree, typechecks the frontend,
 builds, and starts the image against a scratch Postgres. It checks that `coreDetails` reports
 that tag and `isServerKeyValidated: true`, that the schema has `steamAppId`, and that
 `/api/protondb/<id>` is served, and only then publishes `vX.Y.Z`, `vX.Y` and `vX`. A failure
