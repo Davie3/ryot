@@ -11,7 +11,7 @@ and a ProtonDB badge on game pages, published as `ghcr.io/davie3/ryot` (amd64 on
    `is_server_key_validated: true`. The backend and frontend read that flag, so nothing
    else changes.
 2. the ProtonDB badge (below).
-3. this file and the two `fork-*.yml` workflows.
+3. this file, `mise.toml` and the two `fork-*.yml` workflows.
 
 ### ProtonDB badge
 
