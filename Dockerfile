@@ -1,4 +1,4 @@
-ARG NODE_BASE_IMAGE=node:24.22.1-bookworm-slim
+ARG NODE_BASE_IMAGE=node:24.22.3-bookworm-slim
 
 FROM $NODE_BASE_IMAGE AS frontend-build-base
 WORKDIR /app

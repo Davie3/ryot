@@ -37,12 +37,14 @@ Lines added to upstream files, the only places a sync can conflict:
 | `crates/providers/tvdb/src/shows.rs`                         | `..Default::default()` after `tvdb_id`              |
 | `crates/providers/igdb/src/lib.rs`                           | `mod steam;`, two `external_games.*` lines in `GAME_FIELDS`, the `external_games` field on `IgdbItemResponse`, `external_identifiers` in `igdb_response_to_search_response` |
 | `apps/frontend/app/routes/_dashboard.media.item.$id._index.tsx` | the import and `<ProtonDbBadge metadata={metadataDetails.data} />` after the collections group |
+| `Dockerfile`                                                 | `NODE_BASE_IMAGE` bumped to `node:24.22.3-bookworm-slim` (Node.js November 2026 security release), ahead of upstream |
 
 When resolving a conflict, keep upstream's side and add the fork's line back. If upstream
 moves or renames the code a line hooks into, put the line in the equivalent place. If upstream
 adds its own Steam id to `MetadataExternalIdentifiers`, drop `steam_app_id`, point `steam.rs`
 and the badge's query at upstream's field, and drop the `..Default::default()` in TVDB if
-nothing else needs it.
+nothing else needs it. Once upstream's `NODE_BASE_IMAGE` is at least the fork's, take
+upstream's line and drop the `Dockerfile` row.
 
 There is no `main`: upstream is read from the `upstream` remote, and the `Lock main` ruleset
 stops a `main` branch being created here. Upstream's own workflows are disabled in this
